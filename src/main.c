@@ -37,6 +37,8 @@
 #define USER_LED                DK_LED3
 
 #define USER_BUTTON             DK_BTN1_MSK
+#define SIGNAL_BUTTON           DK_BTN2_MSK
+
 
 static bool app_button_state;
 static struct k_work adv_work;
@@ -46,28 +48,14 @@ static const struct bt_data ad[] = {
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 };
 
-#define BT_UUID_SIGNAL_SERVICE_VAL BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x123456789abc)
-#define BT_UUID_SIGNAL_CHAR_VAL    BT_UUID_128_ENCODE(0xabcdef01, 0x2345, 0x6789, 0xabcd, 0xef0123456789)
+#define BT_UUID_SIGNAL_CHAR_VAL BT_UUID_128_ENCODE(0x00001527, 0x1212, 0xefde, 0x1523, 0x785feabcd123)
 
-static const struct bt_uuid_128 signalUUID = BT_UUID_INIT_128(
-	0x78, 0x56, 0x34, 0x12,
-	0x34, 0x12,
-	0x78, 0x56,
-	0x12, 0x34,
-	0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc
-);
-static const struct bt_uuid_128 signalCharacteristic = BT_UUID_INIT_128(
-	0x01, 0xef, 0xcd, 0xab,
-	0x45, 0x23,
-	0x89, 0x67,
-	0xab, 0xcd,
-	0xef, 0x01, 0x23, 0x45, 0x67, 0x89
-);
+static const struct bt_uuid_128 signalCharacteristic_uuid = BT_UUID_INIT_128(BT_UUID_SIGNAL_CHAR_VAL);
+
 static struct bt_conn *current_conn;
 
 static const struct bt_data sd[] = {
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_LBS_VAL),
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_SIGNAL_SERVICE_VAL),
 };
 
 static void adv_work_handler(struct k_work *work)
@@ -108,9 +96,9 @@ static void signal_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 	       value == BT_GATT_CCC_NOTIFY ? "enabled" : "disabled");
 }
 
-BT_GATT_SERVICE_DEFINE(signal_svc,
-	BT_GATT_PRIMARY_SERVICE((const struct bt_uuid *)&signalUUID),
-	BT_GATT_CHARACTERISTIC((const struct bt_uuid *)&signalCharacteristic,
+BT_GATT_SERVICE_DEFINE(lbs_signal_svc,
+	BT_GATT_PRIMARY_SERVICE((const struct bt_uuid *)BT_UUID_DECLARE_128(BT_UUID_LBS_VAL)),
+	BT_GATT_CHARACTERISTIC((const struct bt_uuid *)&signalCharacteristic_uuid,
 			   BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_WRITE,
 			   BT_GATT_PERM_WRITE, NULL, signal_write, NULL),
 	BT_GATT_CCC(signal_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
@@ -130,7 +118,7 @@ void sendSignalData(void)
 		data[i] = (uint8_t)i;
 	}
 
-	err = bt_gatt_notify(current_conn, &attr_signal_svc[1], data, sizeof(data));
+	err = bt_gatt_notify(current_conn, &attr_lbs_signal_svc[2], data, sizeof(data));
 	if (err) {
 		printk("Failed to send signal data (err %d)\n", err);
 	} else {
@@ -270,9 +258,12 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	if (has_changed & USER_BUTTON) {
 		uint32_t user_button_state = button_state & USER_BUTTON;
-
 		bt_lbs_send_button_state(user_button_state);
 		app_button_state = user_button_state ? true : false;
+	} else if (has_changed & SIGNAL_BUTTON) {
+		uint32_t signal_button_state = button_state & SIGNAL_BUTTON;
+		sendSignalData();
+		printk("Signal button %s\n", signal_button_state ? "pressed" : "released");
 	}
 }
 
