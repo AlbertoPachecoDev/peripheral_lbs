@@ -46,8 +46,28 @@ static const struct bt_data ad[] = {
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 };
 
+#define BT_UUID_SIGNAL_SERVICE_VAL BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x123456789abc)
+#define BT_UUID_SIGNAL_CHAR_VAL    BT_UUID_128_ENCODE(0xabcdef01, 0x2345, 0x6789, 0xabcd, 0xef0123456789)
+
+static const struct bt_uuid_128 signalUUID = BT_UUID_INIT_128(
+	0x78, 0x56, 0x34, 0x12,
+	0x34, 0x12,
+	0x78, 0x56,
+	0x12, 0x34,
+	0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc
+);
+static const struct bt_uuid_128 signalCharacteristic = BT_UUID_INIT_128(
+	0x01, 0xef, 0xcd, 0xab,
+	0x45, 0x23,
+	0x89, 0x67,
+	0xab, 0xcd,
+	0xef, 0x01, 0x23, 0x45, 0x67, 0x89
+);
+static struct bt_conn *current_conn;
+
 static const struct bt_data sd[] = {
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_LBS_VAL),
+	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_SIGNAL_SERVICE_VAL),
 };
 
 static void adv_work_handler(struct k_work *work)
@@ -67,6 +87,57 @@ static void advertising_start(void)
 	k_work_submit(&adv_work);
 }
 
+static ssize_t signal_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                            const void *buf, uint16_t len, uint16_t offset,
+                            uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+
+	printk("signalCharacteristic write received, len %u\n", len);
+	return len;
+}
+
+static void signal_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	ARG_UNUSED(attr);
+
+	printk("signalCharacteristic CCC %s\n",
+	       value == BT_GATT_CCC_NOTIFY ? "enabled" : "disabled");
+}
+
+BT_GATT_SERVICE_DEFINE(signal_svc,
+	BT_GATT_PRIMARY_SERVICE((const struct bt_uuid *)&signalUUID),
+	BT_GATT_CHARACTERISTIC((const struct bt_uuid *)&signalCharacteristic,
+			   BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_WRITE,
+			   BT_GATT_PERM_WRITE, NULL, signal_write, NULL),
+	BT_GATT_CCC(signal_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
+);
+
+void sendSignalData(void)
+{
+	uint8_t data[250];
+	int err;
+
+	if (!current_conn) {
+		printk("Cannot send signal data: no connection\n");
+		return;
+	}
+
+	for (size_t i = 0; i < sizeof(data); i++) {
+		data[i] = (uint8_t)i;
+	}
+
+	err = bt_gatt_notify(current_conn, &attr_signal_svc[1], data, sizeof(data));
+	if (err) {
+		printk("Failed to send signal data (err %d)\n", err);
+	} else {
+		printk("Sent %u bytes on signalCharacteristic\n", (unsigned int)sizeof(data));
+	}
+}
+
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
@@ -76,12 +147,22 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	printk("Connected\n");
 
+	if (current_conn) {
+		bt_conn_unref(current_conn);
+	}
+	current_conn = bt_conn_ref(conn);
+
 	dk_set_led_on(CON_STATUS_LED);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
+
+	if (current_conn == conn) {
+		bt_conn_unref(current_conn);
+		current_conn = NULL;
+	}
 
 	dk_set_led_off(CON_STATUS_LED);
 }
